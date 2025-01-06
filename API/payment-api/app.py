@@ -1,30 +1,19 @@
 from flask import Flask, jsonify, request
-import mysql.connector
+from pymongo import MongoClient
+from bson.objectid import ObjectId
 
 app = Flask(__name__)
 
-# MySQL connection setup
-db_config = {
-    "host": "localhost",
-    "user": "root",  # Replace with your MySQL username
-    "password": "",  # Replace with your MySQL password
-    "database": "authentication_db"
-}
-
-def get_db_connection():
-    return mysql.connector.connect(**db_config)
+# MongoDB connection setup
+client = MongoClient("mongodb://localhost:27017/")
+db = client.authentication_db  # Replace with your MongoDB database name
+payments_collection = db.payments  # MongoDB collection for payments
 
 # Endpoint to get all payments
 @app.route('/api/payments', methods=['GET'])
 def get_payments():
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    # Retrieve all payment records
-    cursor.execute("SELECT * FROM payments")
-    payments = cursor.fetchall()
-    
-    conn.close()
+    # Retrieve all payment records from the MongoDB collection
+    payments = list(payments_collection.find({}, {'_id': 0}))  # Excluding _id from result
     return jsonify(payments)
 
 # Endpoint to create a payment
@@ -36,35 +25,31 @@ def create_payment():
     if amount is None:
         return jsonify({"error": "Amount is required"}), 400
     
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    
-    # Insert a new payment record
-    cursor.execute("INSERT INTO payments (amount, status) VALUES (%s, %s)", (amount, "Completed"))
-    conn.commit()
-    payment_id = cursor.lastrowid
+    # Create a new payment record in MongoDB
+    new_payment = {
+        "amount": amount,
+        "status": "Completed"
+    }
+    result = payments_collection.insert_one(new_payment)
     
     # Retrieve the newly created payment
-    cursor.execute("SELECT * FROM payments WHERE id = %s", (payment_id,))
-    new_payment = cursor.fetchone()
+    payment = payments_collection.find_one({"_id": result.inserted_id}, {'_id': 0})
     
-    conn.close()
-    return jsonify(new_payment), 201
+    return jsonify(payment), 201
 
 # Endpoint to get a specific payment by ID
-@app.route('/api/payment/<int:payment_id>', methods=['GET'])
+@app.route('/api/payment/<payment_id>', methods=['GET'])
 def get_payment(payment_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    try:
+        # Retrieve payment by ObjectId
+        payment = payments_collection.find_one({"_id": ObjectId(payment_id)}, {'_id': 0})
+        
+        if payment is None:
+            return jsonify({'error': 'Payment not found'}), 404
+        return jsonify(payment)
     
-    # Retrieve payment by ID
-    cursor.execute("SELECT * FROM payments WHERE id = %s", (payment_id,))
-    payment = cursor.fetchone()
-    
-    conn.close()
-    if payment is None:
-        return jsonify({'error': 'Payment not found'}), 404
-    return jsonify(payment)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
 
 # Run the application
 if __name__ == '__main__':
